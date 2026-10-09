@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"></head>
+<body>
+  <!-- 보이지 않는 작업용 문서. HLS 엔진을 여기서 돌려(브라우저 안에서) mp4 를 만든다.
+       서비스워커는 Blob/URL.createObjectURL/DOM 이 없어서 이 offscreen 문서가 필요하다. -->
+  <script src="lib/mux.min.js"></script>
+  <script src="lib/hls-engine.js"></script>
+  <script src="offscreen.js"></script>
+</body>
+</html>

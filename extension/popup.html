@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="popup.css" />
+  <title>싹싹김치</title>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <img src="icons/icon32.png" alt="" width="20" height="20" />
+      <span>싹싹김치</span>
+    </div>
+    <div class="header-right">
+      <span id="helper-status" class="pill pill-off" title="로컬 헬퍼 연결 상태">헬퍼 확인 중…</span>
+      <button id="open-options" class="icon-btn" title="설정">⚙</button>
+    </div>
+  </header>
+
+  <!-- 헬퍼 미연결 안내 배너 -->
+  <div id="helper-warn" class="banner hidden">
+    로컬 헬퍼가 연결되지 않았습니다. <a href="#" id="warn-options">설정</a>에서 토큰/주소를 확인하세요.
+  </div>
+  <!-- ffmpeg 없음 안내 -->
+  <div id="ffmpeg-warn" class="banner banner-soft hidden">
+    ffmpeg 미설치 — HLS/DASH 합치기가 안 됩니다. 헬퍼 폴더에서 <code>setup_ffmpeg.bat</code> 실행.
+  </div>
+
+  <!-- 이 페이지 영상 (YouTube 등 — 헬퍼/yt-dlp 로 자동 분석) -->
+  <section id="page-video-sec" class="hidden">
+    <div class="section-head"><h2>이 페이지 영상</h2></div>
+    <div id="page-video" class="list"></div>
+  </section>
+
+  <!-- 감지된 스트림 -->
+  <section>
+    <div class="section-head">
+      <h2>감지된 스트림 <span id="stream-count" class="count">0</span></h2>
+      <button id="clear-btn" class="text-btn">목록 비우기</button>
+    </div>
+    <div id="streams" class="list">
+      <div class="empty" id="streams-empty">
+        아직 감지된 스트림이 없습니다.<br />
+        영상을 <b>재생</b>하면 여기에 나타납니다.
+      </div>
+    </div>
+    <div class="page-dl">
+      <span class="page-dl-hint">안 잡히는 사이트(YouTube 등) → yt-dlp:</span>
+      <button id="page-dl-btn" class="dl-btn small">이 페이지 받기</button>
+    </div>
+    <div id="page-note" class="q-note"></div>
+  </section>
+
+  <!-- 다운로드 진행 -->
+  <section>
+    <div class="section-head">
+      <h2>다운로드</h2>
+      <span>
+        <button id="clear-finished" class="text-btn">완료 지우기</button>
+        <button id="open-folder" class="text-btn">폴더 열기</button>
+      </span>
+    </div>
+    <div id="jobs" class="list">
+      <div class="empty" id="jobs-empty">진행 중인 다운로드가 없습니다.</div>
+    </div>
+  </section>
+
+  <footer>
+    다운로드 권한이 있는 콘텐츠에만 사용하세요. 저작권 준수 책임은 사용자 본인에게 있습니다. · 싹싹김치
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>

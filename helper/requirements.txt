@@ -1,0 +1,4 @@
+# 싹싹김치 — 헬퍼 의존성
+# 설치:  pip install -r requirements.txt
+# (ffmpeg 는 pip 가 아니라 setup_ffmpeg.bat 로 별도 설치)
+yt-dlp>=2025.1.1

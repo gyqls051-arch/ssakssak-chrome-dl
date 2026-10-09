@@ -1,0 +1,20 @@
+# 파이썬
+__pycache__/
+*.pyc
+
+# 다운로드 결과물(혹시 폴더가 여기로 잡힌 경우)
+*.mp4
+*.mkv
+*.webm
+*.part
+*.ytdl
+
+# OS
+Thumbs.db
+.DS_Store
+
+# 참고: 토큰/설정은 리포가 아니라 ~/.ssakssak/ 에 저장되므로 커밋되지 않음
+
+# 패키징 산출물
+dist/
+store/

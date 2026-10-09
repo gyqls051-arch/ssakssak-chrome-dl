@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>싹싹김치 — 설정</title>
+  <style>
+    body { font-family: "Segoe UI","Malgun Gothic",system-ui,sans-serif; background:#0d1117; color:#e6edf3;
+           max-width:560px; margin:0 auto; padding:28px 20px; font-size:14px; }
+    h1 { font-size:18px; }
+    p.desc { color:#8b949e; line-height:1.6; }
+    label { display:block; margin:18px 0 6px; font-weight:600; }
+    input[type=text] { width:100%; padding:9px 10px; border-radius:8px; border:1px solid #30363d;
+                       background:#0d1117; color:#e6edf3; font-size:13px; }
+    .row { display:flex; gap:8px; align-items:center; margin-top:14px; }
+    button { background:#1f6feb; color:#fff; border:none; border-radius:8px; padding:9px 16px;
+             cursor:pointer; font-weight:600; font-size:13px; }
+    button:hover { background:#388bfd; }
+    .status { margin-left:6px; font-size:13px; }
+    .ok { color:#7ee787; } .bad { color:#ff7b72; }
+    .hint { color:#8b949e; font-size:12px; line-height:1.6; margin-top:6px; }
+    code { background:#161b22; padding:1px 6px; border-radius:4px; border:1px solid #30363d; }
+    .box { background:#161b22; border:1px solid #30363d; border-radius:10px; padding:14px 16px; margin-top:20px; }
+    .ok-banner { background:rgba(46,160,67,.12); border:1px solid #238636; color:#7ee787;
+                 padding:12px 14px; border-radius:10px; line-height:1.7; margin:16px 0; }
+    .muted { color:#8b949e; }
+  </style>
+</head>
+<body>
+  <h1>싹싹김치 — 설정</h1>
+
+  <div class="ok-banner">
+    ✅ <b>HLS·MP4 다운로드는 설정 없이 바로 됩니다 — 이 화면은 안 건드려도 돼요.</b><br>
+    <b>토큰도 없앴습니다.</b> 헬퍼(YouTube·DASH용)는 <b>켜기만 하면 자동 연결</b>됩니다.
+    (“연결 안 됨”은 고장이 아니라 “헬퍼를 안 켰다”는 뜻일 뿐)
+  </div>
+
+  <div class="box">
+    <b>그냥 쓰려면 (헬퍼 필요 없음)</b>
+    <div class="hint">
+      영상 재생 → 확장 아이콘 → 스트림 <b>“다운로드”</b> → (HLS면) 화질 선택. 끝.
+    </div>
+    <b style="display:block;margin-top:12px">YouTube·DASH 받으려면 (헬퍼, 토큰 불필요)</b>
+    <div class="hint">
+      1) <code>helper</code> 폴더의 <code>install_autostart.bat</code> 를 <b>한 번</b> 실행
+         → 로그인 시 헬퍼가 <b>창 없이 자동 실행</b> (다시 안 건드려도 됨)<br />
+      2) 끝. 토큰 입력 없음. YouTube 는 팝업의 <b>“이 페이지 받기”</b>, DASH 는 카드의 <b>“헬퍼로 받기”</b>.
+    </div>
+    <div class="row" style="margin-top:12px">
+      <button id="test" style="background:#21262d;border:1px solid #30363d;">헬퍼 연결 확인</button>
+      <span id="status" class="status muted">헬퍼는 선택 — HLS·MP4는 이 설정 없이도 됩니다.</span>
+    </div>
+  </div>
+
+  <details style="margin-top:16px">
+    <summary class="muted" style="cursor:pointer">고급: 헬퍼 주소 변경</summary>
+    <label for="helperUrl">헬퍼 주소</label>
+    <input id="helperUrl" type="text" placeholder="http://127.0.0.1:8787" />
+    <div class="row" style="margin-top:10px"><button id="save">저장</button></div>
+  </details>
+
+  <script src="options.js"></script>
+</body>
+</html>
