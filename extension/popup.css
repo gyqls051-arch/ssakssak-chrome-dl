@@ -141,3 +141,6 @@ h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: v
 
 footer { padding: 8px 12px; font-size: 10.5px; color: var(--muted); border-top: 1px solid var(--border); line-height: 1.5; }
 .hidden { display: none !important; }
+
+.offcut-promo { display: block; color: var(--muted); font-size: 11px; padding: 3px 0 7px; text-decoration: none; }
+.offcut-promo:hover, .offcut-promo:focus-visible { color: var(--accent2); text-decoration: underline; }

@@ -16,17 +16,8 @@ let helperOn = false;     // 헬퍼 연결 상태 — 켜져 있으면 모든 �
 
 /* ---------- 헬퍼 통신 ---------- */
 
-async function getConfig() {
-  const c = await chrome.storage.local.get(['helperUrl']);
-  return { helperUrl: (c.helperUrl || 'http://127.0.0.1:8787').replace(/\/+$/, '') };
-}
-
 async function api(path, opts = {}) {
-  const { helperUrl } = await getConfig();
-  // 토큰 불필요 — 헬퍼가 Origin 으로 웹페이지를 막고 확장은 자동 허용한다.
-  const res = await fetch(helperUrl + path, opts);
-  if (!res.ok) throw new Error('HTTP ' + res.status);
-  return res.json();
+  return SsakHelper.request(path, opts);
 }
 
 /* ---------- 초기화 ---------- */

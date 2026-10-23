@@ -357,7 +357,10 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- 공통 응답 ----
     def _cors(self):
-        self.send_header("Access-Control-Allow-Origin", "*")
+        origin = self.headers.get("Origin", "")
+        if re.fullmatch(r"chrome-extension://[a-p]{32}", origin):
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
         self.send_header("Access-Control-Allow-Headers", "X-SSAK-Token, Content-Type")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 
@@ -370,22 +373,25 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def setup(self):
+        super().setup()
+        self.connection.settimeout(10)
+
     def _allowed(self):
-        # 토큰 없이도 안전하게: 웹페이지(http/https Origin)는 차단, 확장/로컬은 허용.
-        # 브라우저가 Origin 을 강제로 붙이므로 웹페이지는 이를 못 속인다(CSRF 차단).
-        # (예전처럼 토큰을 보내면 웹페이지여도 허용 — 하위호환)
-        origin = self.headers.get("Origin", "")
-        if origin.startswith("http://") or origin.startswith("https://"):
-            import hmac
-            return hmac.compare_digest(self.headers.get("X-SSAK-Token", ""), CONFIG.get("token", ""))
-        return True   # chrome-extension:// · Origin 없음(로컬) → 허용
+        import hmac
+        expected = CONFIG.get("token", "")
+        supplied = self.headers.get("X-SSAK-Token", "")
+        return (isinstance(expected, str) and len(expected) >= 24
+                and hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8")))
 
     def _read_json(self):
-        try:
-            n = int(self.headers.get("Content-Length", 0))
-            return json.loads(self.rfile.read(n) or b"{}")
-        except Exception:
-            return {}
+        n = int(self.headers.get("Content-Length", 0))
+        if not 0 <= n <= 262144:
+            raise ValueError("Request body too large or invalid")
+        data = json.loads(self.rfile.read(n) or b"{}")
+        if not isinstance(data, dict):
+            raise ValueError("Object body required")
+        return data
 
     def log_message(self, *a):
         pass  # 기본 액세스 로그 끔(콘솔 깔끔하게)
@@ -420,8 +426,12 @@ class Handler(BaseHTTPRequestHandler):
         if not self._allowed():
             return self._json(403, {"error": "forbidden"})
 
-        if self.path == "/probe":
+        try:
             data = self._read_json()
+        except (ValueError, UnicodeError):
+            return self._json(400, {"error": "invalid request body"})
+
+        if self.path == "/probe":
             url = (data.get("url") or "").strip()
             if not url:
                 return self._json(400, {"error": "url required"})
@@ -432,7 +442,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"error": friendly_error(str(e)), "formats": []})
 
         if self.path == "/download":
-            data = self._read_json()
             url = (data.get("url") or "").strip()
             if not url:
                 return self._json(400, {"error": "url required"})

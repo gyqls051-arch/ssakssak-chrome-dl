@@ -43,7 +43,7 @@
     <div class="hint">
       1) <code>helper</code> 폴더의 <code>install_autostart.bat</code> 를 <b>한 번</b> 실행
          → 로그인 시 헬퍼가 <b>창 없이 자동 실행</b> (다시 안 건드려도 됨)<br />
-      2) 끝. 토큰 입력 없음. YouTube 는 팝업의 <b>“이 페이지 받기”</b>, DASH 는 카드의 <b>“헬퍼로 받기”</b>.
+      2) <code>python helper.py token</code>으로 연결 토큰을 확인해 아래에 입력하고 저장하세요. YouTube 는 팝업의 <b>“이 페이지 받기”</b>, DASH 는 카드의 <b>“헬퍼로 받기”</b>.
     </div>
     <div class="row" style="margin-top:12px">
       <button id="test" style="background:#21262d;border:1px solid #30363d;">헬퍼 연결 확인</button>
@@ -51,13 +51,16 @@
     </div>
   </div>
 
-  <details style="margin-top:16px">
+  <label for="helperToken">헬퍼 연결 토큰</label>
+  <input id="helperToken" type="password" autocomplete="off" />
+  <details open style="margin-top:16px">
     <summary class="muted" style="cursor:pointer">고급: 헬퍼 주소 변경</summary>
     <label for="helperUrl">헬퍼 주소</label>
     <input id="helperUrl" type="text" placeholder="http://127.0.0.1:8787" />
     <div class="row" style="margin-top:10px"><button id="save">저장</button></div>
   </details>
 
+  <script src="helper-client.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

@@ -1,3 +1,4 @@
+importScripts('helper-client.js');
 /* =============================================================================
  * 싹싹김치 — background service worker (스트림 감지부)
  * -----------------------------------------------------------------------------
@@ -252,14 +253,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 });
 
-async function helperBase() {
-  const c = await chrome.storage.local.get(['helperUrl']);
-  return (c.helperUrl || 'http://127.0.0.1:8787').replace(/\/+$/, '');
-}
 async function helperJSON(path, opts) {
-  const r = await fetch((await helperBase()) + path, opts);
-  if (!r.ok) throw new Error('HTTP ' + r.status);
-  return r.json();
+  return SsakHelper.request(path, opts);
 }
 
 /* ---------- 브라우저 내 다운로드 오케스트레이션 ---------- */
