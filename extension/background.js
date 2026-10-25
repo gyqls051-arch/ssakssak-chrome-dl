@@ -36,12 +36,18 @@ const ibDownloadMap = {};           // chrome.downloads id -> ibjob id (progress
 const MAX_PER_TAB = 60;             // 한 탭에 너무 많이 쌓이지 않게 상한
 
 // 서비스워커가 잠들었다 깨면 메모리가 비므로 session 저장소에서 복구
-(async () => {
+const ibReady = (async () => {
   try {
     const all = await chrome.storage.session.get(null);
     for (const [k, v] of Object.entries(all)) {
       if (k.startsWith('streams:')) tabStreams[k.slice('streams:'.length)] = v;
-      else if (k === 'ibjobs') ibjobsMem = v || {};
+      else if (k === 'ibjobs') ibjobsMem = Object.assign({}, v || {}, ibjobsMem);
+    }
+    for (const job of Object.values(ibjobsMem)) {
+      if (Number.isInteger(job.downloadId)) {
+        ibDownloadMap[job.downloadId] = job.id;
+        reconcileDownload(job.downloadId);
+      }
     }
   } catch (e) { /* 최초 실행 등 — 무시 */ }
 })();
@@ -259,7 +265,7 @@ async function helperJSON(path, opts) {
 
 /* ---------- 브라우저 내 다운로드 오케스트레이션 ---------- */
 
-function ibPersist() { chrome.storage.session.set({ ibjobs: ibjobsMem }).catch(() => {}); }
+function ibPersist() { ibReady.then(() => chrome.storage.session.set({ ibjobs: ibjobsMem })).catch(() => {}); }
 function ibSetJob(id, patch) {
   ibjobsMem[id] = Object.assign(ibjobsMem[id] || { id }, patch);
   ibPersist();
@@ -294,15 +300,13 @@ function startIbHls(msg) {
       ibSetJob(id, { status: 'merging', percent: 100 });
       chrome.downloads.download({ url: res.blobUrl, filename, saveAs: false }, (dlId) => {
         if (chrome.runtime.lastError || dlId === undefined) {
-          // 폴백: offscreen 에서 a 클릭으로 저장 (chrome.downloads 가 blob URL 거부 시)
-          chrome.runtime.sendMessage({ target: 'offscreen', cmd: 'save', id, filename })
-            .then((r) => ibSetJob(id, r && r.ok ? { status: 'done', percent: 100, filename }
-                                                : { status: 'error', error: (r && r.error) || '저장 실패' }))
-            .catch((e) => ibSetJob(id, { status: 'error', error: String(e.message || e) }));
+          ibSetJob(id, { status: 'error', error: '브라우저 저장을 시작하지 못했습니다. 다시 시도해 주세요.' });
+          chrome.runtime.sendMessage({ target: 'offscreen', cmd: 'revoke', id }).catch(() => {});
         } else {
-          ibSetJob(id, { status: 'done', percent: 100, filename });
+          ibDownloadMap[dlId] = id;
+          ibSetJob(id, { status: 'downloading', percent: 0, filename, downloadId: dlId, offscreen: true });
+          reconcileDownload(dlId);
         }
-        setTimeout(() => chrome.runtime.sendMessage({ target: 'offscreen', cmd: 'revoke', id }).catch(() => {}), 60000);
       });
     })
     .catch((e) => ibSetJob(id, { status: 'error', error: String(e.message || e) }));
@@ -314,18 +318,32 @@ function startIbProgressive(msg) {
   const filename = sanitizeName(msg.title) + '.' + (msg.ext || 'mp4');
   ibSetJob(id, { id, title: msg.title || '', status: 'downloading', percent: 0, speed: '', eta: null, filename, error: '' });
   chrome.downloads.download({ url: msg.url, filename, saveAs: false }, (dlId) => {
-    if (chrome.runtime.lastError) { ibSetJob(id, { status: 'error', error: chrome.runtime.lastError.message }); return; }
+    if (chrome.runtime.lastError || dlId === undefined) { ibSetJob(id, { status: 'error', error: chrome.runtime.lastError?.message || '저장 시작 실패' }); return; }
     ibDownloadMap[dlId] = id;
+    ibSetJob(id, { downloadId: dlId });
+    reconcileDownload(dlId);
   });
   return id;
 }
 
-// chrome.downloads 상태로 progressive 작업 진행률/완료 갱신
-chrome.downloads.onChanged.addListener((delta) => {
-  const id = ibDownloadMap[delta.id];
-  if (!id) return;
-  if (delta.state) {
-    if (delta.state.current === 'complete') ibSetJob(id, { status: 'done', percent: 100 });
-    else if (delta.state.current === 'interrupted') ibSetJob(id, { status: 'error', error: '다운로드 중단됨' });
+// Both HLS and direct saves finish only after Chrome confirms the file result.
+function applyDownloadState(downloadId, state, error) {
+  const id = ibDownloadMap[downloadId];
+  if (!id || !ibjobsMem[id]) return;
+  if (state === 'complete') ibSetJob(id, { status: 'done', percent: 100, error: '' });
+  else if (state === 'interrupted') ibSetJob(id, { status: 'error', error: error || '다운로드 중단됨' });
+  if ((state === 'complete' || state === 'interrupted') && ibjobsMem[id].offscreen) {
+    chrome.runtime.sendMessage({ target: 'offscreen', cmd: 'revoke', id }).catch(() => {});
   }
+}
+function reconcileDownload(downloadId) {
+  chrome.downloads.search({ id: downloadId }, (items) => {
+    if (chrome.runtime.lastError) return;
+    const item = items && items[0];
+    if (item) applyDownloadState(downloadId, item.state, item.error);
+  });
+}
+chrome.downloads.onChanged.addListener(async (delta) => {
+  await ibReady;
+  if (delta.state) applyDownloadState(delta.id, delta.state.current, delta.error?.current);
 });

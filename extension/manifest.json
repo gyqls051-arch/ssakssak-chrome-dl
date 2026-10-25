@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "싹싹김치",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "웹 페이지에서 재생 중인 영상 스트림(HLS 등)을 감지해 다운로드합니다. 다운로드 권한이 있는 콘텐츠에만 사용하세요.",
 
   "permissions": [

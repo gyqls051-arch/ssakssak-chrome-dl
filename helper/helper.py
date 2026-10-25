@@ -25,6 +25,10 @@ import os
 import re
 import sys
 import threading
+import tempfile
+import shutil
+import errno
+from pathlib import Path
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -35,7 +39,7 @@ except ImportError:
     print("[오류] yt-dlp 가 없습니다.  설치:  pip install -r requirements.txt", file=sys.stderr)
     sys.exit(1)
 
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 
 # 설정/토큰/ffmpeg 가 저장되는 폴더
 CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".ssakssak")
@@ -215,7 +219,7 @@ def probe_formats(url, headers):
 
 def build_ydl_opts(job, ffmpeg_dir):
     base = sanitize_filename(job.get("title")) if job.get("title") else "%(title).150B"
-    outtmpl = os.path.join(CONFIG["download_dir"], base + ".%(ext)s")
+    outtmpl = os.path.join(job.get("_workdir", CONFIG["download_dir"]), base + ".%(ext)s")
 
     def progress_hook(d):
         if job.get("_cancel"):
@@ -260,7 +264,8 @@ def build_ydl_opts(job, ffmpeg_dir):
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
-        "overwrites": True,
+        "overwrites": False,
+        "post_hooks": [lambda filename: job.update(_output=filename)],
         **({"format": job["format"]} if job.get("format") else {}),  # 화질 선택 시 selector 적용
         "restrictfilenames": False,
         "consoletitle": False,
@@ -305,21 +310,71 @@ def run_job(job):
         if job.get("_cancel"):
             job["status"] = "canceled"
             return
-        ffmpeg_dir = find_ffmpeg()
-        os.makedirs(CONFIG["download_dir"], exist_ok=True)
-        job["status"] = "downloading"
+        workdir = None
         try:
+            ffmpeg_dir = find_ffmpeg()
+            os.makedirs(CONFIG["download_dir"], exist_ok=True)
+            workdir = Path(tempfile.mkdtemp(prefix=".ssak-download-", dir=CONFIG["download_dir"]))
+            job["_workdir"] = str(workdir)
+            job["status"] = "downloading"
             opts = build_ydl_opts(job, ffmpeg_dir)
             with yt_dlp.YoutubeDL(opts) as ydl:
-                ydl.download([job["url"]])
-            if job["status"] != "canceled":
-                job["status"] = "done"
-                job["percent"] = 100
+                result = ydl.download([job["url"]])
+            if job.get("_cancel"):
+                raise JobCancelled()
+            output = Path(job.get("_output", "")).resolve()
+            if result or output.parent != workdir.resolve() or not output.is_file() or output.stat().st_size == 0:
+                raise OSError("다운로드 결과 파일을 확인하지 못했습니다.")
+            published = publish_download(output, Path(CONFIG["download_dir"]))
+            job["filename"] = published.name
+            job["status"] = "done"
+            job["percent"] = 100
         except JobCancelled:
             job["status"] = "canceled"
         except Exception as e:
             job["status"] = "error"
             job["error"] = friendly_error(job.get("_last_error") or str(e))
+        finally:
+            job.pop("_workdir", None)
+            job.pop("_output", None)
+            if workdir and workdir.resolve().parent == Path(CONFIG["download_dir"]).resolve() and workdir.name.startswith(".ssak-download-"):
+                shutil.rmtree(workdir, ignore_errors=True)
+
+
+def publish_download(source, destination):
+    """Publish exclusively, including filesystems without hard links."""
+    for n in range(10000):
+        target = destination / (source.name if n == 0 else f"{source.stem} ({n}){source.suffix}")
+        try:
+            os.link(source, target)
+            return target
+        except FileExistsError:
+            continue
+        except OSError as exc:
+            if exc.errno not in (errno.EPERM, errno.EACCES, errno.EOPNOTSUPP, errno.ENOSYS, errno.EXDEV):
+                raise
+        try:
+            stream = target.open("xb")
+        except FileExistsError:
+            continue
+        identity = os.fstat(stream.fileno())
+        try:
+            with stream, source.open("rb") as incoming:
+                shutil.copyfileobj(incoming, stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+            return target
+        except BaseException:
+            stream.close()
+            # Never unlink a replacement created by another process.
+            try:
+                if os.path.samestat(identity, target.stat()):
+                    target.unlink()
+            except FileNotFoundError:
+                pass
+            raise
+    raise OSError("같은 이름의 파일이 너무 많습니다. 다른 저장 폴더를 선택하세요.")
+
 
 
 def prune_jobs(limit=60):
