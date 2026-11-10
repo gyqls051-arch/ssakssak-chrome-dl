@@ -28,6 +28,9 @@ import threading
 import tempfile
 import shutil
 import errno
+import ipaddress
+import subprocess
+from urllib.parse import urlsplit
 from pathlib import Path
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -114,20 +117,26 @@ def _has_ffmpeg(folder):
 
 
 def setup_ffmpeg():
-    """yt-dlp 권장 정적 빌드에서 ffmpeg/ffprobe 를 받아 ~/.ssakssak/ffmpeg 에 넣는다."""
+    """미러에 고정된 정적 빌드에서 ffmpeg/ffprobe 를 받아 ~/.ssakssak/ffmpeg 에 넣는다."""
     import urllib.request
     import zipfile
     import io
+    import hashlib
 
     if os.name != "nt":
         print("자동 설치는 Windows 전용입니다. Linux/Mac 은 패키지 매니저로 ffmpeg 설치 후 PATH 등록.")
         return
-    url = ("https://github.com/yt-dlp/FFmpeg-Builds/releases/latest/download/"
-           "ffmpeg-master-latest-win64-gpl.zip")
+    url = ("https://github.com/gyqls051-arch/ssakssak-chrome-dl/releases/download/"
+           "ffmpeg-mirror/ffmpeg-master-latest-win64-gpl.zip")
+    expected_size = 202132742
+    expected_sha256 = "9698c9ce1203df59f19d11c358ab269a8ab7806ec89f0af39b04100057f57e0d"
     dest = os.path.join(CONFIG_DIR, "ffmpeg")
     os.makedirs(dest, exist_ok=True)
     print(f"ffmpeg 다운로드 중… (수십 MB)\n  {url}")
-    data = urllib.request.urlopen(url).read()
+    data = urllib.request.urlopen(url, timeout=60).read()
+    if len(data) != expected_size or hashlib.sha256(data).hexdigest() != expected_sha256:
+        print("[오류] ffmpeg 파일 검증에 실패했습니다. 다운로드를 중단합니다.")
+        return
     print("압축 해제 중…")
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         for name in z.namelist():
@@ -172,15 +181,62 @@ def fmt_bytes(n):
     return f"{n:.1f}TB"
 
 
+SAFE_HEADER_ALLOW = {"referer", "origin", "user-agent", "accept", "accept-language"}
+
+
+def sanitize_forward_headers(headers):
+    if not isinstance(headers, dict):
+        return {}
+    cleaned = {}
+    for k, v in headers.items():
+        if not isinstance(k, str) or not isinstance(v, str) or not v:
+            continue
+        if k.lower() not in SAFE_HEADER_ALLOW:
+            continue
+        if "\r" in v or "\n" in v or "\x00" in v:
+            continue
+        cleaned[k] = v[:2048]
+    return cleaned
+
+
+def validate_target_url(raw_url):
+    url = str(raw_url or "").strip()
+    if not url or len(url) > 4096 or url.startswith("-"):
+        raise ValueError("유효하지 않은 URL입니다.")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in url):
+        raise ValueError("URL에 제어문자가 포함되어 있습니다.")
+    parsed = urlsplit(url)
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise ValueError("http 또는 https URL만 허용됩니다.")
+    host = parsed.hostname.lower().rstrip(".")
+    if host in ("localhost", "ip6-localhost"):
+        raise ValueError("로컬 주소는 다운로드할 수 없습니다.")
+    try:
+        ip = ipaddress.ip_address(host)
+        if ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
+            raise ValueError("사설/내부 IP 주소는 다운로드할 수 없습니다.")
+    except ValueError as exc:
+        if "다운로드할 수 없습니다" in str(exc):
+            raise
+    return url
+
+
+def build_safe_cli_args(base_args, target):
+    """외부 프로세스 실행 시 옵션 인젝션 방지를 위해 항상 '--' 구분자를 삽입한다."""
+    return [*base_args, "--", target]
+
+
 def probe_formats(url, headers):
     """yt-dlp 로 화질 변형 목록을 조회한다(다운로드 X). 화질 선택 UI 용.
        각 항목에 yt-dlp 가 이해하는 'selector' 를 미리 만들어 확장은 그대로 보내기만 하면 됨."""
+    safe_url = validate_target_url(url)
     opts = {
         "quiet": True, "no_warnings": True, "noplaylist": True,
-        "http_headers": {k: v for k, v in (headers or {}).items() if v},
+        "socket_timeout": 20,
+        "http_headers": sanitize_forward_headers(headers),
     }
     with yt_dlp.YoutubeDL(opts) as ydl:
-        info = ydl.extract_info(url, download=False)
+        info = ydl.extract_info(safe_url, download=False)
     if info.get("entries"):                      # 혹시 플레이리스트면 첫 항목
         info = info["entries"][0]
 
@@ -253,18 +309,20 @@ def build_ydl_opts(job, ffmpeg_dir):
 
     opts = {
         "outtmpl": outtmpl,
-        "http_headers": {k: v for k, v in (job.get("headers") or {}).items() if v},  # ★ 헤더 1:1 전달
+        "http_headers": sanitize_forward_headers(job.get("headers")),
         "progress_hooks": [progress_hook],
         "postprocessor_hooks": [pp_hook],
         "merge_output_format": "mp4",
         "concurrent_fragment_downloads": 5,     # HLS/DASH 세그먼트 병렬
-        "retries": 10,
-        "fragment_retries": 10,
+        "socket_timeout": 30,
+        "retries": 5,
+        "fragment_retries": 5,
         "noprogress": True,
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
         "overwrites": False,
+        "postprocessor_args": {"ffmpeg": ["-nostdin"]},
         "post_hooks": [lambda filename: job.update(_output=filename)],
         **({"format": job["format"]} if job.get("format") else {}),  # 화질 선택 시 selector 적용
         "restrictfilenames": False,
@@ -311,7 +369,15 @@ def run_job(job):
             job["status"] = "canceled"
             return
         workdir = None
+        timeout_sec = max(30, int(CONFIG.get("job_timeout_sec", 3600)))
+        def _expire_job():
+            job["_timed_out"] = True
+            job["_cancel"] = True
+        watchdog = threading.Timer(timeout_sec, _expire_job)
+        watchdog.daemon = True
+        watchdog.start()
         try:
+            safe_url = validate_target_url(job["url"])
             ffmpeg_dir = find_ffmpeg()
             os.makedirs(CONFIG["download_dir"], exist_ok=True)
             workdir = Path(tempfile.mkdtemp(prefix=".ssak-download-", dir=CONFIG["download_dir"]))
@@ -319,7 +385,7 @@ def run_job(job):
             job["status"] = "downloading"
             opts = build_ydl_opts(job, ffmpeg_dir)
             with yt_dlp.YoutubeDL(opts) as ydl:
-                result = ydl.download([job["url"]])
+                result = ydl.download([safe_url])
             if job.get("_cancel"):
                 raise JobCancelled()
             output = Path(job.get("_output", "")).resolve()
@@ -330,11 +396,16 @@ def run_job(job):
             job["status"] = "done"
             job["percent"] = 100
         except JobCancelled:
-            job["status"] = "canceled"
+            if job.get("_timed_out"):
+                job["status"] = "error"
+                job["error"] = f"다운로드 제한 시간({timeout_sec}초)을 초과했습니다."
+            else:
+                job["status"] = "canceled"
         except Exception as e:
             job["status"] = "error"
             job["error"] = friendly_error(job.get("_last_error") or str(e))
         finally:
+            watchdog.cancel()
             job.pop("_workdir", None)
             job.pop("_output", None)
             if workdir and workdir.resolve().parent == Path(CONFIG["download_dir"]).resolve() and workdir.name.startswith(".ssak-download-"):
@@ -432,6 +503,22 @@ class Handler(BaseHTTPRequestHandler):
         super().setup()
         self.connection.settimeout(10)
 
+    def _host_allowed(self):
+        host = (self.headers.get("Host") or "").strip().lower()
+        if not host:
+            return True
+        bare = host.split(":", 1)[0]
+        return bare in ("127.0.0.1", "localhost")
+
+    def _origin_allowed(self):
+        origin = (self.headers.get("Origin") or "").strip()
+        if not origin:
+            return True
+        allowed_ids = CONFIG.get("allowed_extension_ids")
+        if isinstance(allowed_ids, list) and allowed_ids:
+            return any(origin == f"chrome-extension://{ext_id}" for ext_id in allowed_ids if isinstance(ext_id, str))
+        return bool(re.fullmatch(r"chrome-extension://[a-p]{32}", origin))
+
     def _allowed(self):
         import hmac
         expected = CONFIG.get("token", "")
@@ -453,12 +540,14 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- 라우팅 ----
     def do_OPTIONS(self):
+        if not self._host_allowed() or not self._origin_allowed():
+            return self._json(403, {"error": "forbidden"})
         self.send_response(204)
         self._cors()
         self.end_headers()
 
     def do_GET(self):
-        if not self._allowed():
+        if not self._host_allowed() or not self._allowed():
             return self._json(403, {"error": "forbidden"})
         if self.path == "/health":
             return self._json(200, {
@@ -478,7 +567,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(404, {"error": "not found"})
 
     def do_POST(self):
-        if not self._allowed():
+        if not self._host_allowed() or not self._origin_allowed() or not self._allowed():
             return self._json(403, {"error": "forbidden"})
 
         try:
@@ -487,9 +576,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(400, {"error": "invalid request body"})
 
         if self.path == "/probe":
-            url = (data.get("url") or "").strip()
-            if not url:
+            raw_url = (data.get("url") or "").strip()
+            if not raw_url:
                 return self._json(400, {"error": "url required"})
+            try:
+                url = validate_target_url(raw_url)
+            except ValueError as ve:
+                return self._json(400, {"error": str(ve), "formats": []})
             try:
                 return self._json(200, probe_formats(url, data.get("headers", {})))
             except Exception as e:
@@ -497,9 +590,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"error": friendly_error(str(e)), "formats": []})
 
         if self.path == "/download":
-            url = (data.get("url") or "").strip()
-            if not url:
+            raw_url = (data.get("url") or "").strip()
+            if not raw_url:
                 return self._json(400, {"error": "url required"})
+            try:
+                url = validate_target_url(raw_url)
+            except ValueError as ve:
+                return self._json(400, {"error": str(ve)})
             job = {
                 "id": uuid.uuid4().hex[:8],
                 "url": url,
@@ -538,8 +635,12 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/open":
             try:
                 os.makedirs(CONFIG["download_dir"], exist_ok=True)
+                target_dir = os.path.abspath(CONFIG["download_dir"])
                 if os.name == "nt":
-                    os.startfile(CONFIG["download_dir"])  # noqa
+                    os.startfile(target_dir)  # noqa
+                else:
+                    opener = "open" if sys.platform == "darwin" else "xdg-open"
+                    subprocess.run(build_safe_cli_args([opener], target_dir), timeout=10, check=False)
                 return self._json(200, {"ok": True})
             except Exception as e:
                 return self._json(500, {"error": str(e)})

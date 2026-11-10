@@ -108,30 +108,58 @@
   function refresh() { host.style.display = isVideoPage() ? 'block' : 'none'; }
   refresh(); setInterval(refresh, 1000);
 
-  function setPanel(html) { panel.className = 'panel'; panel.innerHTML = html; }
+  function clearPanel() {
+    panel.className = 'panel';
+    panel.replaceChildren();
+  }
   function status(msg, cls, withBar, pct) {
-    setPanel(`<div class="status ${cls || ''}">${msg}</div>` +
-             (withBar ? `<div class="bar"><i style="width:${pct || 0}%"></i></div>` : ''));
+    clearPanel();
+    const st = document.createElement('div');
+    st.className = 'status' + (cls === 'err' || cls === 'ok' ? ' ' + cls : '');
+    st.textContent = String(msg == null ? '' : msg);
+    panel.appendChild(st);
+    if (withBar) {
+      const bar = document.createElement('div');
+      bar.className = 'bar';
+      const fill = document.createElement('i');
+      const clampedPct = Math.min(100, Math.max(0, Number(pct) || 0));
+      fill.style.width = `${clampedPct}%`;
+      bar.appendChild(fill);
+      panel.appendChild(bar);
+    }
+  }
+
+  function addHeading(text) {
+    const mh = document.createElement('div');
+    mh.className = 'mh';
+    mh.textContent = text;
+    panel.appendChild(mh);
   }
 
   async function openMenu() {
     status('영상 분석 중…');
     const res = await getMuxedFormats();
-    let html = '';
+    clearPanel();
     if (res && res.formats && res.formats.length) {
-      html += `<div class="mh">바로 받기 (설치 없이)</div>`;
-      res.formats.forEach((f, i) => { html += `<button class="opt" data-i="${i}">${f.label}</button>`; });
+      addHeading('바로 받기 (설치 없이)');
+      res.formats.forEach((f) => {
+        const btn = document.createElement('button');
+        btn.className = 'opt';
+        btn.type = 'button';
+        btn.textContent = String(f.label || '');
+        btn.onclick = () => startDirect(f, res && res.title);
+        panel.appendChild(btn);
+      });
     } else {
-      html += `<div class="mh">직접 받을 수 있는 화질이 없어요(암호화됨).</div>`;
+      addHeading('직접 받을 수 있는 화질이 없어요(암호화됨).');
     }
-    html += `<div class="mh">고화질·기타는 헬퍼(yt-dlp)로</div><button class="opt hp">헬퍼로 받기 (모든 화질)</button>`;
-    setPanel(html);
-    panel.querySelectorAll('.opt').forEach((b) => {
-      b.onclick = () => {
-        if (b.classList.contains('hp')) startHelper(res && res.title);
-        else startDirect(res.formats[+b.dataset.i], res && res.title);
-      };
-    });
+    addHeading('고화질·기타는 헬퍼(yt-dlp)로');
+    const hpBtn = document.createElement('button');
+    hpBtn.className = 'opt hp';
+    hpBtn.type = 'button';
+    hpBtn.textContent = '헬퍼로 받기 (모든 화질)';
+    hpBtn.onclick = () => startHelper(res && res.title);
+    panel.appendChild(hpBtn);
   }
 
   // 직링크(muxed) → chrome.downloads 로 바로 (헬퍼 없이)
@@ -151,7 +179,7 @@
     try { r = await chrome.runtime.sendMessage({ cmd: 'pageDownload', url: location.href, title: title || cleanTitle() }); }
     catch { r = null; }
     if (!r || r.error || !r.jobId)
-      return status('헬퍼가 꺼져 있어요. helper의 <b>install_autostart.bat</b> 한 번 실행.', 'err');
+      return status('헬퍼가 꺼져 있어요. helper의 install_autostart.bat 한 번 실행.', 'err');
     poll('helperJobs', r.jobId);
   }
 

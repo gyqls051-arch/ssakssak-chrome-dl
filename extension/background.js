@@ -22,7 +22,7 @@ importScripts('helper-client.js');
 
 // 헬퍼로 넘길 때 의미 있는 헤더만 추린다(토큰 서명 스트림이 열리는 데 필요한 것들).
 // Host/Range/sec-fetch-* 등은 오히려 직접 다운로드를 깨므로 제외.
-const HEADER_ALLOW = ['referer', 'origin', 'cookie', 'user-agent', 'accept', 'accept-language'];
+const HEADER_ALLOW = ['referer', 'origin', 'user-agent', 'accept', 'accept-language'];
 
 // requestId 단위로 onBeforeRequest~onHeadersReceived 사이의 조각을 모아두는 임시 버퍼
 let pending = {};                   // requestId -> { url, type, tabId, pageUrl, reqHeaders }
@@ -63,13 +63,32 @@ function headersArrayToObject(arr) {
 
 // 캡처한 전체 헤더에서 다운로드에 쓸 것만 골라 원래 표기로 되돌린다.
 function curateHeaders(reqHeaders) {
-  const pretty = { referer: 'Referer', origin: 'Origin', cookie: 'Cookie',
+  const pretty = { referer: 'Referer', origin: 'Origin',
                    'user-agent': 'User-Agent', accept: 'Accept', 'accept-language': 'Accept-Language' };
   const out = {};
+  if (!reqHeaders || typeof reqHeaders !== 'object') return out;
   for (const name of HEADER_ALLOW) {
     if (reqHeaders[name] != null && reqHeaders[name] !== '') out[pretty[name]] = reqHeaders[name];
   }
   return out;
+}
+
+function sanitizeSafeHeaders(headers) {
+  if (!headers || typeof headers !== 'object') return {};
+  const lowered = {};
+  for (const [k, v] of Object.entries(headers)) {
+    if (typeof v === 'string') lowered[k.toLowerCase()] = v;
+  }
+  return curateHeaders(lowered);
+}
+
+function isHttpMediaUrl(u) {
+  try {
+    const parsed = new URL(String(u || ''));
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
 }
 
 // URL → 미디어 유형 분류. 매니페스트(HLS/DASH)는 항상, 프로그레시브 파일은 조건부.
@@ -151,11 +170,11 @@ chrome.webRequest.onBeforeRequest.addListener((d) => {
   };
 }, FILTER_BEFORE);
 
-// (2) 요청 헤더 전송 직전: 실제 Referer/Origin/Cookie/User-Agent 캡처 (extraHeaders 필수!)
+// (2) 요청 헤더 전송 직전: 비민감 요청 헤더만 관찰 (Authorization/Cookie 수집 금지)
 chrome.webRequest.onBeforeSendHeaders.addListener((d) => {
   const p = pending[d.requestId];
   if (p) p.reqHeaders = headersArrayToObject(d.requestHeaders);
-}, FILTER_MEDIA, ['requestHeaders', 'extraHeaders']);
+}, FILTER_MEDIA, ['requestHeaders']);
 
 // (3) 응답 헤더 수신: Content-Type/Length 로 최종 판정 후 확정
 chrome.webRequest.onHeadersReceived.addListener((d) => {
@@ -183,7 +202,7 @@ chrome.webRequest.onHeadersReceived.addListener((d) => {
     size: len || 0,
     headers: curateHeaders(p.reqHeaders || {})              // ★ 다운로드에 그대로 넘길 헤더
   });
-}, FILTER_MEDIA, ['responseHeaders', 'extraHeaders']);
+}, FILTER_MEDIA, ['responseHeaders']);
 
 // 정리: 완료/실패 시 남은 버퍼 제거
 chrome.webRequest.onCompleted.addListener((d) => { delete pending[d.requestId]; }, FILTER_MEDIA);
@@ -194,14 +213,25 @@ chrome.webRequest.onErrorOccurred.addListener((d) => { delete pending[d.requestI
 chrome.tabs.onRemoved.addListener((tabId) => clearTab(String(tabId)));
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (!msg) return;
+  if (!msg || !sender || sender.id !== chrome.runtime.id) return;
+  const extOriginPrefix = chrome.runtime.getURL('');
+  const isExtPage = !sender.tab && typeof sender.url === 'string' && sender.url.startsWith(extOriginPrefix);
+  const hasValidTab = Boolean(sender.tab && typeof sender.tab.id === 'number' && sender.tab.id >= 0 && isHttpMediaUrl(sender.tab.url));
+  if (!isExtPage && !hasValidTab) return;
 
-  // offscreen → background 진행률
+  // offscreen → background 진행률 (확장 내부 페이지 전용)
   if (msg.target === 'background' && msg.cmd === 'ib_progress') {
+    if (!isExtPage) return;
     ibSetJob(msg.id, { status: msg.phase, percent: Math.round((msg.ratio || 0) * 100) });
     return;
   }
   if (!msg.cmd) return;
+
+  const privilegedOnly = new Set(['getStreams', 'clearStreams', 'ibVariants', 'ibDownload', 'ibClearFinished', 'pageProbe']);
+  if (privilegedOnly.has(msg.cmd) && !isExtPage) {
+    sendResponse({ error: 'forbidden' });
+    return true;
+  }
 
   switch (msg.cmd) {
     case 'getStreams':
@@ -214,17 +244,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
     // ----- 브라우저 내 처리 (헬퍼 없이) -----
     case 'ibVariants':            // HLS 화질 변형 목록
+      if (!isHttpMediaUrl(msg.url)) { sendResponse({ error: '유효하지 않은 URL' }); return true; }
       ensureOffscreen()
-        .then(() => chrome.runtime.sendMessage({ target: 'offscreen', cmd: 'variants', url: msg.url, headers: msg.headers }))
+        .then(() => chrome.runtime.sendMessage({ target: 'offscreen', cmd: 'variants', url: msg.url, headers: sanitizeSafeHeaders(msg.headers) }))
         .then((r) => sendResponse(r || { error: '응답 없음' }))
         .catch((e) => sendResponse({ error: String(e.message || e) }));
       return true;
 
     case 'ibDownload':            // HLS 다운로드(offscreen 엔진)
-      sendResponse({ id: startIbHls(msg) });
+      if (!isHttpMediaUrl(msg.mediaUrl)) { sendResponse({ error: '유효하지 않은 URL' }); return true; }
+      sendResponse({ id: startIbHls(Object.assign({}, msg, { headers: sanitizeSafeHeaders(msg.headers) })) });
       return true;
 
     case 'ibProgressive':         // 단순 mp4/webm → chrome.downloads 로 바로
+      if (!isHttpMediaUrl(msg.url)) { sendResponse({ error: '유효하지 않은 URL' }); return true; }
       sendResponse({ id: startIbProgressive(msg) });
       return true;
 
@@ -242,16 +275,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 
     // ----- 헬퍼(yt-dlp) 프록시: 페이지 영상 정보/다운로드/진행률 -----
     case 'pageProbe':           // 현재 페이지를 yt-dlp 로 분석 → 썸네일/제목/화질
+      if (!isHttpMediaUrl(msg.url)) { sendResponse({ error: '유효하지 않은 URL' }); return true; }
       helperJSON('/probe', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: msg.url, headers: {} }) })
         .then((r) => sendResponse(r)).catch(() => sendResponse({ error: 'helper' }));
       return true;
 
-    case 'pageDownload':        // 페이지 주소를 yt-dlp 로 다운로드 (YouTube 등)
+    case 'pageDownload': {      // 페이지 주소를 yt-dlp 로 다운로드 (YouTube 등)
+      const targetUrl = hasValidTab ? sender.tab.url : msg.url;
+      if (!isHttpMediaUrl(targetUrl)) { sendResponse({ error: '유효하지 않은 URL' }); return true; }
       helperJSON('/download', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: msg.url, type: 'page', headers: {}, title: msg.title || '', format: msg.format || '' }) })
+        body: JSON.stringify({ url: targetUrl, type: 'page', headers: {}, title: msg.title || '', format: msg.format || '' }) })
         .then((r) => sendResponse(r)).catch(() => sendResponse({ error: 'helper' }));
       return true;
+    }
 
     case 'helperJobs':          // 헬퍼 작업 목록(진행률 폴링용)
       helperJSON('/jobs').then((r) => sendResponse(r)).catch(() => sendResponse({ jobs: [] }));
